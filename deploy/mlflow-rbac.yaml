@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mlflow-training
+  namespace: wbc-training
+rules:
+  - apiGroups: ["mlflow.opendatahub.io"]
+    resources: ["experiments"]
+    verbs: ["get", "list", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mlflow-training-binding
+  namespace: wbc-training
+subjects:
+  - kind: ServiceAccount
+    name: isaaclab-gpu
+    namespace: wbc-training
+roleRef:
+  kind: Role
+  name: mlflow-training
+  apiGroup: rbac.authorization.k8s.io

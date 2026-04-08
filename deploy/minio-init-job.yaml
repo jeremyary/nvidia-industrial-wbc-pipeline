@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-init
+  namespace: wbc-training
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        pipeline.wbc/phase: setup
+        pipeline.wbc/component: storage
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: isaaclab-gpu
+      containers:
+        - name: init
+          image: quay.io/minio/mc:latest
+          securityContext:
+            runAsUser: 0
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              mc alias set local http://minio:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD &&
+              mc mb local/wbc-training --ignore-existing &&
+              mc mb local/mlflow --ignore-existing &&
+              echo "Buckets:" &&
+              mc ls local/
+          envFrom:
+            - secretRef:
+                name: minio-credentials
