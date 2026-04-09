@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: isaaclab-preset-test
+  name: test-preset
   namespace: wbc-training
 spec:
   activeDeadlineSeconds: 3600
@@ -10,7 +10,7 @@ spec:
   template:
     metadata:
       labels:
-        app: isaaclab-preset-test
+        app: test-preset
         pipeline.wbc/phase: validation
         pipeline.wbc/component: validation
     spec:

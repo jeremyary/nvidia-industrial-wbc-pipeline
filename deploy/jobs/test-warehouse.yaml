@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: rough-terrain-test
+  name: test-warehouse
   namespace: wbc-training
 spec:
   activeDeadlineSeconds: 3600
@@ -10,7 +10,7 @@ spec:
   template:
     metadata:
       labels:
-        app: rough-terrain-test
+        app: test-warehouse
         pipeline.wbc/phase: validation
         pipeline.wbc/component: validation
     spec:
@@ -30,14 +30,10 @@ spec:
           args:
             - |
               set -euo pipefail
-
-              ONNX_DIR="/tmp/onnx_export"
-              mkdir -p "${ONNX_DIR}"
-
-              echo "=== Rough Terrain Validation ==="
-              cat > /tmp/validate_rough.py << 'PYEOF'
+              echo "=== Warehouse Env Validation ==="
+              cat > /tmp/validate_warehouse.py << 'PYEOF'
               import sys, os
-              sys.argv = ['train', '--task', 'WBC-Velocity-Rough-G1-29DOF-v0', '--headless', '--num_envs', '64', '--max_iterations', '10']
+              sys.argv = ['train', '--task', 'WBC-Velocity-Warehouse-G1-29DOF-v0', '--headless', '--num_envs', '64', '--max_iterations', '10']
 
               from isaaclab.app import AppLauncher
               import argparse
@@ -51,7 +47,6 @@ spec:
 
               import gymnasium as gym
               from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
-              from isaaclab_rl.rsl_rl.exporter import export_policy_as_onnx
               from rsl_rl.runners import OnPolicyRunner
               import wbc_pipeline.envs
 
@@ -72,7 +67,7 @@ spec:
               obs_dim = env.observation_space['policy'].shape[1]
               act_dim = env.num_actions
               print(f'Obs dim: {obs_dim}, Action dim: {act_dim}')
-              assert obs_dim == 290, f'Expected 290 (103 base + 187 height scan), got {obs_dim}'
+              assert obs_dim == 466, f'Expected 466 (103 base + 363 lidar), got {obs_dim}'
               assert act_dim == 29, f'Expected 29, got {act_dim}'
 
               log_dir = os.path.join('/workspace/isaaclab/logs/rsl_rl', agent_cfg.experiment_name)
@@ -81,37 +76,16 @@ spec:
               runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
 
               print()
-              print('=== Exporting ONNX (rough terrain) ===')
-              onnx_dir = '/tmp/onnx_export'
-              os.makedirs(onnx_dir, exist_ok=True)
-              policy = runner.alg.policy
-              normalizer = policy.actor_obs_normalizer
-              export_policy_as_onnx(policy, path=onnx_dir, normalizer=normalizer, filename='policy.onnx')
-              onnx_path = os.path.join(onnx_dir, 'policy.onnx')
-
-              import onnx
-              model = onnx.load(onnx_path)
-              onnx.checker.check_model(model)
-              in_dims = [d.dim_value for d in model.graph.input[0].type.tensor_type.shape.dim]
-              out_dims = [d.dim_value for d in model.graph.output[0].type.tensor_type.shape.dim]
-              print(f'Input:  name={model.graph.input[0].name!r}, shape={in_dims}')
-              print(f'Output: name={model.graph.output[0].name!r}, shape={out_dims}')
-              assert in_dims == [1, 290], f'Expected [1, 290], got {in_dims}'
-              assert out_dims == [1, 29], f'Expected [1, 29], got {out_dims}'
-
-              print()
-              print('=== Rough terrain validation PASSED ===')
-              print(f'  Obs: {obs_dim} (103 base + 187 height scan)')
+              print('=== Warehouse env validation PASSED ===')
+              print(f'  Obs: {obs_dim} (103 base + 363 lidar)')
               print(f'  Actions: {act_dim}')
-              print(f'  ONNX: input [1, 290], output [1, 29]')
-              print(f'  Terrain: generator with ROUGH_TERRAINS_CFG')
-              print(f'  Height scanner: RayCasterCfg on torso_link')
+              print(f'  Scene: USD warehouse asset')
 
               env.close()
               app_launcher.app.close()
               PYEOF
-              /workspace/isaaclab/isaaclab.sh -p /tmp/validate_rough.py
-              echo "=== Rough Terrain Validation COMPLETE ==="
+              /workspace/isaaclab/isaaclab.sh -p /tmp/validate_warehouse.py
+              echo "=== Warehouse Env Validation COMPLETE ==="
           env:
             - name: ACCEPT_EULA
               value: "Y"

@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: training-isaaclab-6k
+  name: training-preset-6k
   namespace: wbc-training
 spec:
   activeDeadlineSeconds: 28800
@@ -10,7 +10,7 @@ spec:
   template:
     metadata:
       labels:
-        app: training-isaaclab-6k
+        app: training-preset-6k
         pipeline.wbc/phase: training
         pipeline.wbc/component: training
     spec:
@@ -106,7 +106,7 @@ spec:
 
               echo ""
               echo "End time: $(date -u)"
-              echo "=== Training Isaac Lab Preset 6K: COMPLETE ==="
+              echo "=== Training Preset 6K: COMPLETE ==="
           env:
             - name: ACCEPT_EULA
               value: "Y"
@@ -117,7 +117,7 @@ spec:
             - name: S3_BUCKET
               value: "wbc-training"
             - name: S3_PREFIX
-              value: "checkpoints-isaaclab-6k"
+              value: "checkpoints-preset-6k"
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
