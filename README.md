@@ -62,6 +62,44 @@ python -m wbc_pipeline.export_onnx \
 
 S3 checkpointing (`S3_ENDPOINT`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`), MLflow tracking (`MLFLOW_TRACKING_URI`), and SIGTERM checkpoint-on-preemption are all opt-in via env vars.
 
+## KFP Pipelines (RHOAI DSPA)
+
+Training is orchestrated as KFP v2 pipelines on RHOAI Data Science Pipelines Application. Two tiers:
+
+**Tier 1 — Single-pod** (default): All training runs in one container. Simple, works for single-GPU RSL-RL jobs.
+
+```bash
+make pipeline-compile                  # compile to wbc_training_pipeline.yaml
+```
+
+**Tier 2 — PyTorchJob** (distributed): A CPU-only launcher pod creates a PyTorchJob CR via the Training Operator. Kueue manages GPU quota. Supports multi-node DDP for SONIC.
+
+```bash
+make pipeline-compile-distributed      # compile to wbc_training_pytorchjob_pipeline.yaml
+```
+
+Both tiers share the same post-training steps: ONNX validation → Model Registry registration.
+
+Submit compiled pipeline YAML through the RHOAI dashboard or DSPA API.
+
+### Model Registry
+
+Trained ONNX models are registered with RHOAI Model Registry for versioning and lineage tracking. The registry runs in `rhoai-model-registries` namespace with a Postgres backend.
+
+```bash
+make deploy-model-registry             # create DB secret + deploy Postgres + ModelRegistry CR
+```
+
+Requires `MODEL_REGISTRY_DB_PASSWORD` in `.env` (see `.env.example`).
+
+### Kueue GPU Quota
+
+PyTorchJob workloads are managed by Kueue for GPU quota enforcement. The ClusterQueue is scoped to the training namespace.
+
+```bash
+make deploy-pytorchjob-infra           # deploy RBAC + Kueue ClusterQueue/LocalQueue
+```
+
 ## OpenShift Jobs
 
 Manifests in `deploy/` are split into `infra/` (namespace, SCC, MinIO, MLflow) and `jobs/` (GPU workloads). Jobs are managed through a parametric Makefile registry — no per-job targets, just `make job-deploy JOB=<name>`.
@@ -97,22 +135,51 @@ JOB_NEEDS_INFRA_my-new-job   = true    # false if no S3/MLflow needed
 
 Jobs with `JOB_NEEDS_INFRA=true` automatically run `make deploy-infra` before deploying. Jobs with `false` only set up the namespace and GPU SCC.
 
-## Roadmap
+## GEAR-SONIC (Motion-Tracking)
 
-Phases 0-3b are complete. Key upcoming work:
+A second training backend using NVIDIA's GEAR-SONIC imitation learning framework with the BONES-SEED motion capture dataset. Produces multi-file ONNX artifacts (encoder + decoder per locomotion mode).
 
-- **YAML config & DOF flexibility**: Externalize presets to YAML files, support variable joint counts (37-DOF full G1, reduced-DOF subsets), ConfigMap-based preset injection in containers.
-- **KFP pipeline**: Define training as a KFP v2 pipeline on RHOAI DSPA (validate → train → export → validate-onnx → register).
-- **Deployment manifests**: DSPA CR, Kueue integration, kustomize overlays.
-- **B200 scale testing**: Performance benchmarks at 8k+ envs on B200 GPUs.
+SONIC uses multi-GPU DDP via HuggingFace Accelerate and targets the same G1 29-DOF robot. The pipeline includes data preparation (CSV→PKL), multi-GPU training, ONNX export, and validation.
+
+```bash
+make build-sonic                       # build SONIC container
+make sonic-pipeline-compile            # Tier 1 pipeline
+make sonic-pipeline-compile-distributed  # Tier 2 PyTorchJob pipeline
+```
+
+SONIC jobs are available in the job registry: `sonic-smoke-test`, `sonic-data-prep`, `sonic-test-l40s`, `sonic-training`, `sonic-training-l40s`.
+
+## B200 Deployment
+
+The pipeline is validated on L40S (48GB VRAM). Moving to B200 (192GB VRAM, 8 GPUs per HGX node) requires:
+
+**GPU Driver**: DGX/HGX B200 nodes use the pre-installed datacenter driver. The GPU Operator cannot deploy driver containers on these platforms — verify the host driver is installed before scheduling workloads.
+
+**Node Configuration**:
+- Label GPU nodes: `nvidia.com/gpu.present=true` (required by Kueue ResourceFlavor)
+- Taint GPU nodes: `nvidia.com/gpu:NoSchedule` (training pods tolerate this; prevents non-GPU workloads from landing on expensive nodes)
+- Verify NVIDIA device plugin is running and GPUs are advertised as allocatable resources
+
+**Kueue Quotas**: Update `deploy/infra/kueue.yaml` for B200 capacity before deploying:
+- `nvidia.com/gpu` nominalQuota: 8 per HGX node (adjust for total cluster GPUs)
+- `cpu` / `memory`: scale to match B200 node specs
+- Deploy with `make deploy-pytorchjob-infra` after updating
+
+**HyperShift**: GPU passthrough for HyperShift hosted clusters is Tech Preview (OCP 4.17+). For production GPU training, bare metal node pools are preferred. Autoscaling GPU node pools to/from zero (OCP 4.21+) reduces cost for burst training.
+
+**Validation Sequence**:
+1. `make job-deploy JOB=smoke-test` — verify container + GPU access
+2. `make job-deploy JOB=test-flat` — verify 10-iter training runs
+3. Submit Tier 2 pipeline via DSPA — verify PyTorchJob + Kueue flow
+4. Submit full training run (6K+ iters, 4096 envs) — verify at production scale
 
 ## Development
 
 ```bash
-pip install -e ".[dev]"     # requires Python >=3.10, <3.13 (Isaac Sim constraint)
+pip install -e ".[dev]"     # requires Python >=3.10
 ruff check src/ tests/      # lint
 ruff format src/ tests/     # format
-pytest tests/ -v            # 93 tests (no GPU needed)
+pytest tests/ -v            # 207 tests (no GPU needed)
 ```
 
-Pre-commit hooks run ruff lint, ruff format, and pytest on every commit. Tests validate joint presets, observation contracts, ONNX structure, phase oscillator behavior, and env registration. Tests that require Isaac Lab runtime are auto-skipped outside the container.
+Pre-commit hooks run ruff lint, ruff format, and pytest on every commit. Tests validate joint presets, observation contracts, ONNX structure, phase oscillator behavior, env registration, PyTorchJob CR construction, pipeline compilation, and Model Registry integration. Tests that require Isaac Lab runtime are auto-skipped outside the container.
