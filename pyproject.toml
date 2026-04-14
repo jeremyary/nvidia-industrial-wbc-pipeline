@@ -22,6 +22,8 @@ dev = [
 pipeline = [
     "kfp>=2.14.3,<3.0",
     "kfp-kubernetes>=1.4.0,<2.0",
+]
+runtime = [
     "kubeflow-training>=1.8.0,<2.0",
 ]
 sonic = [
