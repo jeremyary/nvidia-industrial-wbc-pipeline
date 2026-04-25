@@ -345,14 +345,14 @@ class TestRunCLI:
 
     @patch("wbc_pipeline.pytorchjob.submit_and_wait", return_value=True)
     @patch("wbc_pipeline.pytorchjob.build_pytorchjob")
-    def test_hf_secret_when_token_present(self, mock_build, mock_submit):
-        """CLI mounts hf-credentials when HF_TOKEN is in environment."""
+    def test_hf_secret_when_mount_flag_set(self, mock_build, mock_submit):
+        """CLI mounts hf-credentials when MOUNT_HF_CREDENTIALS is set."""
         from wbc_pipeline.pytorchjob import run
 
         mock_build.return_value = MagicMock()
 
         with (
-            patch.dict("os.environ", {"HF_TOKEN": "hf_abc123"}, clear=False),
+            patch.dict("os.environ", {"MOUNT_HF_CREDENTIALS": "true"}, clear=False),
             patch(
                 "sys.argv",
                 ["pytorchjob", "--name", "t", "--image", "i", "--command", "c"],
@@ -365,13 +365,13 @@ class TestRunCLI:
 
     @patch("wbc_pipeline.pytorchjob.submit_and_wait", return_value=True)
     @patch("wbc_pipeline.pytorchjob.build_pytorchjob")
-    def test_no_hf_secret_without_token(self, mock_build, mock_submit):
-        """CLI does not mount hf-credentials without HF_TOKEN."""
+    def test_no_hf_secret_without_mount_flag(self, mock_build, mock_submit):
+        """CLI does not mount hf-credentials without MOUNT_HF_CREDENTIALS."""
         from wbc_pipeline.pytorchjob import run
 
         mock_build.return_value = MagicMock()
 
-        env = {k: v for k, v in __import__("os").environ.items() if k != "HF_TOKEN"}
+        env = {k: v for k, v in __import__("os").environ.items() if k != "MOUNT_HF_CREDENTIALS"}
         with (
             patch.dict("os.environ", env, clear=True),
             patch(
@@ -393,7 +393,7 @@ class TestRunCLI:
         mock_build.return_value = MagicMock()
 
         with (
-            pytest.raises(SystemExit, match="1"),
+            pytest.raises(SystemExit, match=r"^1$"),
             patch(
                 "sys.argv",
                 ["pytorchjob", "--name", "t", "--image", "i", "--command", "c"],
@@ -474,38 +474,6 @@ class TestPyTorchJobPipelineCompilation:
         params = spec["root"]["inputDefinitions"]["parameters"]
         assert "queue_name" in params
 
-    def test_sonic_pytorchjob_pipeline_compiles(self):
-        """SONIC PyTorchJob pipeline compiles without errors."""
-        from pipeline_test_utils import compile_pipeline
-
-        from wbc_pipeline.sonic.pipeline import sonic_training_pytorchjob_pipeline
-
-        spec = compile_pipeline(sonic_training_pytorchjob_pipeline)
-        assert "root" in spec
-
-    def test_sonic_pytorchjob_pipeline_has_six_tasks(self):
-        """SONIC PyTorchJob pipeline has data_prep, launcher, export, validate, register tasks."""
-        from pipeline_test_utils import compile_pipeline
-
-        from wbc_pipeline.sonic.pipeline import sonic_training_pytorchjob_pipeline
-
-        spec = compile_pipeline(sonic_training_pytorchjob_pipeline)
-        tasks = spec["root"]["dag"]["tasks"]
-        assert len(tasks) == 5
-        assert "sonic-prepare-data-op" in tasks
-        assert "sonic-train-pytorchjob-op" in tasks
-
-    def test_sonic_pytorchjob_pipeline_has_worker_params(self):
-        """SONIC PyTorchJob pipeline has num_workers and gpus_per_worker params."""
-        from pipeline_test_utils import compile_pipeline
-
-        from wbc_pipeline.sonic.pipeline import sonic_training_pytorchjob_pipeline
-
-        spec = compile_pipeline(sonic_training_pytorchjob_pipeline)
-        params = spec["root"]["inputDefinitions"]["parameters"]
-        assert "num_workers" in params
-        assert "gpus_per_worker" in params
-
     def test_rslrl_pytorchjob_references_pytorchjob_module(self):
         """RSL-RL PyTorchJob launcher references wbc_pipeline.pytorchjob module."""
         from pipeline_test_utils import compile_pipeline_full_yaml
@@ -513,13 +481,4 @@ class TestPyTorchJobPipelineCompilation:
         from wbc_pipeline.pipeline import wbc_training_pytorchjob_pipeline
 
         yaml_str = compile_pipeline_full_yaml(wbc_training_pytorchjob_pipeline)
-        assert "wbc_pipeline.pytorchjob" in yaml_str
-
-    def test_sonic_pytorchjob_references_pytorchjob_module(self):
-        """SONIC PyTorchJob launcher references wbc_pipeline.pytorchjob module."""
-        from pipeline_test_utils import compile_pipeline_full_yaml
-
-        from wbc_pipeline.sonic.pipeline import sonic_training_pytorchjob_pipeline
-
-        yaml_str = compile_pipeline_full_yaml(sonic_training_pytorchjob_pipeline)
         assert "wbc_pipeline.pytorchjob" in yaml_str

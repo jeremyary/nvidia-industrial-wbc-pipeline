@@ -23,7 +23,7 @@ import signal
 import sys
 
 JOB_KIND = "PyTorchJob"
-DEFAULT_TIMEOUT = 43200  # 12 hours
+DEFAULT_TIMEOUT = 86400  # 24 hours
 DEFAULT_POLL_INTERVAL = 60  # seconds
 
 
@@ -239,8 +239,7 @@ def run() -> None:
     secret_refs = {
         "minio-credentials": {"MINIO_ROOT_USER": "AWS_ACCESS_KEY_ID", "MINIO_ROOT_PASSWORD": "AWS_SECRET_ACCESS_KEY"},
     }
-    # Only mount HF credentials if present in launcher env
-    if os.environ.get("HF_TOKEN"):
+    if os.environ.get("MOUNT_HF_CREDENTIALS", "").lower() in ("1", "true", "yes"):
         secret_refs["hf-credentials"] = {"HF_TOKEN": "HF_TOKEN"}
 
     job = build_pytorchjob(

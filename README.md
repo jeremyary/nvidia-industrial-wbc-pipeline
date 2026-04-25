@@ -1,15 +1,31 @@
-# WBC Pipeline — G1 Locomotion Training
+# WBC Pipeline — G1 Humanoid Robot Deployment
 
 > [!NOTE]
 > This project was developed with assistance from AI tools.
 
-RL training pipeline for the Unitree G1 humanoid robot using Isaac Lab v2.3.2 + RSL-RL PPO. Trains walking policies and exports them as ONNX models with observation normalization baked in, ready for real-time inference on the physical robot.
+End-to-end ML pipeline for the Unitree G1 humanoid robot, covering three tiers of the robot's control stack:
 
-Currently targets the 29-DOF body-only variant (no fingers). The architecture supports variable DOF configurations via the `JointPreset` system — adding support for the full 37-DOF G1 (locomotion + manipulation) or reduced-DOF subsets (legs-only for faster iteration) means defining a new preset, not rewriting env configs. Each env variant has its own `@configclass` config file following Isaac Lab's pattern (separate classes, not parameterized inheritance).
+```
+Mission Planner (Nemotron)  →  VLA (GR00T N1.7)  →  WBC (GEAR-SONIC)
+  high-level goals             camera + text →        motion commands →
+                               motion commands         joint torques
+```
 
-## Why This Exists
+The project includes three KFP v2 pipelines on RHOAI:
+
+1. **RSL-RL training** — trains velocity-tracking WBC policies from scratch using Isaac Lab + RSL-RL PPO
+2. **SONIC import** — fetches pre-trained GEAR-SONIC whole-body controller ONNX models from HuggingFace, validates, and registers
+3. **VLA fine-tuning** — fine-tunes GR00T N1.7-3B vision-language-action model for G1 navigation
+
+All pipelines produce ONNX models registered in RHOAI Model Registry, ready for deployment.
+
+## RSL-RL Training
+
+RL training pipeline using Isaac Lab v2.3.2 + RSL-RL PPO. Trains walking policies and exports them as ONNX models with observation normalization baked in.
 
 Isaac Lab ships G1 environments for the 37-DOF variant (body + fingers). The downstream inference stack expects 29-DOF policies with a specific joint ordering, default positions, and observation vector. This pipeline bridges that gap — custom environments that produce ONNX models matching the inference contract exactly.
+
+Currently targets the 29-DOF body-only variant (no fingers). The architecture supports variable DOF configurations via the `JointPreset` system — adding support for the full 37-DOF G1 (locomotion + manipulation) or reduced-DOF subsets (legs-only for faster iteration) means defining a new preset, not rewriting env configs. Each env variant has its own `@configclass` config file following Isaac Lab's pattern (separate classes, not parameterized inheritance).
 
 ## Environments
 
@@ -40,10 +56,18 @@ The `export_onnx.py` script derives dimensions from the live environment and val
 
 ## Usage
 
-The container is built on `nvcr.io/nvidia/isaac-sim:5.1.0` with Isaac Lab v2.3.2 installed inside. Two-stage Containerfile: `isaaclab-base` (cached, ~25 min build) and `runtime` (rebuilds in seconds when only `src/` changes). Requires NGC API key in `.env` (see `.env.example`).
+Three container images, each sized for its workload:
+
+| Image | Base | Size | Purpose |
+|-------|------|------|---------|
+| `quay.io/jary/isaaclab-g1-train` | Isaac Sim 5.1.0 + Isaac Lab 2.3.2 | ~15GB | RSL-RL training + ONNX export |
+| `quay.io/jary/wbc-sonic` | `python:3.12-slim` | ~200MB | SONIC checkpoint import (CPU-only) |
+| `quay.io/jary/wbc-vla` | `nvidia/cuda:12.8.0-devel` + Isaac-GR00T | ~8-10GB | VLA fine-tuning + ONNX export |
+
+The RSL-RL container uses a two-stage Containerfile: `isaaclab-base` (cached, ~25 min build) and `runtime` (rebuilds in seconds when only `src/` changes). Requires NGC API key in `.env` (see `.env.example`).
 
 ```bash
-make build              # podman build
+make build              # build RSL-RL container (requires NGC login)
 make push               # push to quay.io
 make local-smoke-test   # local GPU test via Podman + CDI
 ```
@@ -64,23 +88,18 @@ S3 checkpointing (`S3_ENDPOINT`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`), 
 
 ## KFP Pipelines (RHOAI DSPA)
 
-Training is orchestrated as KFP v2 pipelines on RHOAI Data Science Pipelines Application. Two tiers:
-
-**Tier 1 — Single-pod** (default): All training runs in one container. Simple, works for single-GPU RSL-RL jobs.
+Three KFP v2 pipelines run on RHOAI Data Science Pipelines Application:
 
 ```bash
-make pipeline-compile                  # compile to wbc_training_pipeline.yaml
+make pipeline-compile                  # RSL-RL training (single-pod GPU)
+make pipeline-compile-distributed      # RSL-RL training (PyTorchJob, multi-node)
+make sonic-pipeline-compile            # SONIC import (CPU-only)
+make vla-pipeline-compile              # VLA fine-tuning (single GPU)
 ```
 
-**Tier 2 — PyTorchJob** (distributed): A CPU-only launcher pod creates a PyTorchJob CR via the Training Operator. Kueue manages GPU quota. Supports multi-node DDP for SONIC.
+RSL-RL supports two tiers: **Tier 1** (single-pod, default) runs training in one container; **Tier 2** (PyTorchJob) uses a CPU launcher pod to create a PyTorchJob CR via the Training Operator, with Kueue managing GPU quota for multi-node DDP.
 
-```bash
-make pipeline-compile-distributed      # compile to wbc_training_pytorchjob_pipeline.yaml
-```
-
-Both tiers share the same post-training steps: ONNX validation → Model Registry registration.
-
-Submit compiled pipeline YAML through the RHOAI dashboard or DSPA API.
+All pipelines share the same post-processing pattern: ONNX validation → Model Registry registration. Submit compiled pipeline YAML through the RHOAI dashboard or DSPA API.
 
 ### Model Registry
 
@@ -135,19 +154,41 @@ JOB_NEEDS_INFRA_my-new-job   = true    # false if no S3/MLflow needed
 
 Jobs with `JOB_NEEDS_INFRA=true` automatically run `make deploy-infra` before deploying. Jobs with `false` only set up the namespace and GPU SCC.
 
-## GEAR-SONIC (Motion-Tracking)
+## GEAR-SONIC Import
 
-A second training backend using NVIDIA's GEAR-SONIC imitation learning framework with the BONES-SEED motion capture dataset. Produces multi-file ONNX artifacts (encoder + decoder per locomotion mode).
+Imports NVIDIA's pre-trained GEAR-SONIC whole-body controller into the pipeline. SONIC produces three ONNX models (encoder, decoder, planner) that convert motion commands into joint torques for the G1 29-DOF robot.
 
-SONIC uses multi-GPU DDP via HuggingFace Accelerate and targets the same G1 29-DOF robot. The pipeline includes data preparation (CSV→PKL), multi-GPU training, ONNX export, and validation.
+The import pipeline fetches pre-trained ONNX models from HuggingFace (`nvidia/GEAR-SONIC`), caches them in S3, validates shape/inference/determinism, and registers in Model Registry. No GPU required — runs entirely on CPU.
 
 ```bash
-make build-sonic                       # build SONIC container
-make sonic-pipeline-compile            # Tier 1 pipeline
-make sonic-pipeline-compile-distributed  # Tier 2 PyTorchJob pipeline
+make build-sonic                       # build lightweight python:3.12-slim container
+make push-sonic                        # push to quay.io
+make sonic-pipeline-compile            # compile to sonic_pipeline.yaml
 ```
 
-SONIC jobs are available in the job registry: `sonic-smoke-test`, `sonic-data-prep`, `sonic-test-l40s`, `sonic-training`, `sonic-training-l40s`.
+Pipeline steps: `fetch_checkpoint` → `validate_onnx` → `register_model`
+
+## VLA Fine-Tuning (GR00T N1.7-3B)
+
+Fine-tunes NVIDIA's GR00T N1.7-3B vision-language-action model for G1 navigation. GR00T N1.7 is a 3.14B-parameter model (Apache 2.0) that converts camera images + language instructions into robot motion commands.
+
+The fine-tuning pipeline downloads the base model from HuggingFace, fine-tunes with `torchrun` using the built-in `UNITREE_G1` embodiment tag, exports to ONNX, validates, and registers. Default configuration targets a proof-of-concept run: 2K steps, 1 GPU (L40S 48GB), ~30-60 minutes.
+
+```bash
+make build-vla                         # build CUDA 12.8 + Isaac-GR00T container
+make push-vla                          # push to quay.io
+make vla-pipeline-compile              # compile to vla_finetune_pipeline.yaml
+```
+
+Pipeline steps: `data_prep` (CPU) → `fine_tune_and_export` (GPU) → `validate_onnx` (CPU) → `register_model` (CPU)
+
+| Parameter | Default | Notes |
+|-----------|---------|-------|
+| `base_model_repo` | `nvidia/GR00T-N1.7-3B` | HuggingFace model ID |
+| `embodiment_tag` | `UNITREE_G1` | Built-in G1 config |
+| `dataset_name` | `robot_sim.PickNPlace` | Demo data bundled in container |
+| `max_steps` | 2000 | Increase for production runs |
+| `global_batch_size` | 32 | |
 
 ## B200 Deployment
 
@@ -179,7 +220,7 @@ The pipeline is validated on L40S (48GB VRAM). Moving to B200 (192GB VRAM, 8 GPU
 pip install -e ".[dev]"     # requires Python >=3.10
 ruff check src/ tests/      # lint
 ruff format src/ tests/     # format
-pytest tests/ -v            # 207 tests (no GPU needed)
+pytest tests/ -v            # 237 tests (no GPU needed)
 ```
 
-Pre-commit hooks run ruff lint, ruff format, and pytest on every commit. Tests validate joint presets, observation contracts, ONNX structure, phase oscillator behavior, env registration, PyTorchJob CR construction, pipeline compilation, and Model Registry integration. Tests that require Isaac Lab runtime are auto-skipped outside the container.
+Pre-commit hooks run ruff lint, ruff format, and pytest on every commit. Tests validate joint presets, observation contracts, ONNX structure, phase oscillator behavior, env registration, PyTorchJob CR construction, pipeline compilation (RSL-RL, SONIC, VLA), Model Registry integration, and VLA config. Tests that require Isaac Lab runtime are auto-skipped outside the container.

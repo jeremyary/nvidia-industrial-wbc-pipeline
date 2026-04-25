@@ -34,6 +34,13 @@ sonic = [
 registry = [
     "model-registry>=0.3.8,<1.0",
 ]
+deploy = [
+    "huggingface-hub>=0.23.0,<1.0",
+    "model-registry>=0.3.8,<1.0",
+]
+vla = [
+    "huggingface-hub>=0.23.0,<1.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

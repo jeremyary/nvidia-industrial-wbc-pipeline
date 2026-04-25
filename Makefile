@@ -2,13 +2,14 @@
 export
 
 IMAGE ?= quay.io/jary/isaaclab-g1-train
-SONIC_IMAGE ?= quay.io/jary/isaaclab-g1-sonic
+SONIC_IMAGE ?= quay.io/jary/wbc-sonic
+GALLERY_IMAGE ?= quay.io/jary/wbc-gallery
+VLA_IMAGE ?= quay.io/jary/wbc-vla
 TAG ?= latest
 NAMESPACE ?= wbc-training
 
-# Model Registry Postgres credentials (override in .env)
+# Model Registry Postgres credentials (set in .env)
 MODEL_REGISTRY_DB_USER ?= mlmduser
-MODEL_REGISTRY_DB_PASSWORD ?= mlmdpass
 MODEL_REGISTRY_DB_NAME ?= wbc_model_registry
 
 # ── Job registry ────────────────────────────────────────────────────
@@ -55,26 +56,6 @@ JOB_FILE_training-preset-6k     = deploy/jobs/training-preset-6k.yaml
 JOB_NAME_training-preset-6k     = training-preset-6k
 JOB_NEEDS_INFRA_training-preset-6k = true
 
-JOB_FILE_sonic-data-prep        = deploy/jobs/sonic-data-prep.yaml
-JOB_NAME_sonic-data-prep        = sonic-data-prep
-JOB_NEEDS_INFRA_sonic-data-prep = true
-
-JOB_FILE_sonic-smoke-test       = deploy/jobs/sonic-smoke-test.yaml
-JOB_NAME_sonic-smoke-test       = sonic-smoke-test
-JOB_NEEDS_INFRA_sonic-smoke-test = false
-
-JOB_FILE_sonic-test-l40s        = deploy/jobs/sonic-test-l40s.yaml
-JOB_NAME_sonic-test-l40s        = sonic-test-l40s
-JOB_NEEDS_INFRA_sonic-test-l40s = true
-
-JOB_FILE_sonic-training         = deploy/jobs/sonic-training.yaml
-JOB_NAME_sonic-training         = sonic-training
-JOB_NEEDS_INFRA_sonic-training  = true
-
-JOB_FILE_sonic-training-l40s    = deploy/jobs/sonic-training-l40s.yaml
-JOB_NAME_sonic-training-l40s    = sonic-training-l40s
-JOB_NEEDS_INFRA_sonic-training-l40s = true
-
 # Resolve JOB variable to file/name/infra-flag
 _JOB_FILE       = $(JOB_FILE_$(JOB))
 _JOB_NAME       = $(JOB_NAME_$(JOB))
@@ -82,28 +63,45 @@ _JOB_NEEDS_INFRA = $(JOB_NEEDS_INFRA_$(JOB))
 
 .PHONY: build push ngc-login local-smoke-test \
         build-sonic push-sonic \
+        build-gallery push-gallery \
+        build-vla push-vla \
         deploy-infra deploy-pytorchjob-infra deploy-model-registry \
         job-deploy job-logs job-clean job-list \
         pipeline-compile pipeline-compile-distributed \
-        sonic-pipeline-compile sonic-pipeline-compile-distributed \
+        sonic-pipeline-compile \
+        vla-pipeline-compile \
         pipeline-deploy \
+        download-checkpoint play record-video record-all-videos \
         lint test
 
 # ── Container ────────────────────────────────────────────────────────
 ngc-login:
 	@echo "$(NGC_API_KEY)" | podman login nvcr.io -u '$$oauthtoken' --password-stdin
 
-build: ngc-login
+build:
+	@if ! podman image exists $(IMAGE):$(TAG) 2>/dev/null; then $(MAKE) --no-print-directory ngc-login; fi
 	podman build --format docker -t $(IMAGE):$(TAG) -f Containerfile .
 
 push: build
 	podman push $(IMAGE):$(TAG)
 
-build-sonic: ngc-login
+build-sonic:
 	podman build --format docker -t $(SONIC_IMAGE):$(TAG) -f Containerfile.sonic .
 
 push-sonic: build-sonic
 	podman push $(SONIC_IMAGE):$(TAG)
+
+build-gallery:
+	podman build --format docker -t $(GALLERY_IMAGE):$(TAG) -f Containerfile.gallery .
+
+push-gallery: build-gallery
+	podman push $(GALLERY_IMAGE):$(TAG)
+
+build-vla:
+	podman build --format docker -t $(VLA_IMAGE):$(TAG) -f Containerfile.vla .
+
+push-vla: build-vla
+	podman push $(VLA_IMAGE):$(TAG)
 
 # ── Local GPU smoke test (Podman + CDI) ──────────────────────────────
 local-smoke-test:
@@ -134,9 +132,15 @@ ifdef HF_TOKEN
 		--dry-run=client -o yaml | oc apply -f -
 	@echo "HF credentials secret created/updated."
 endif
+	oc apply -f deploy/infra/gallery.yaml
+	@echo "Video gallery deployed. Route:"
+	@oc get route video-gallery -n $(NAMESPACE) -o jsonpath='https://{.spec.host}{"\n"}' 2>/dev/null || echo "  (route pending)"
 
 # ── Model Registry infrastructure ──────────────────────────────────
 deploy-model-registry:
+ifndef MODEL_REGISTRY_DB_PASSWORD
+	$(error MODEL_REGISTRY_DB_PASSWORD is required. Set it in .env)
+endif
 	oc create secret generic wbc-model-registry-db -n rhoai-model-registries \
 		--from-literal=POSTGRES_USER=$(MODEL_REGISTRY_DB_USER) \
 		--from-literal=POSTGRES_PASSWORD=$(MODEL_REGISTRY_DB_PASSWORD) \
@@ -209,13 +213,6 @@ job-list:
 	@echo "    training-rough-6k    - rough terrain"
 	@echo "    training-warehouse-6k - warehouse scene"
 	@echo "    training-preset-6k   - Isaac Lab stock preset"
-	@echo ""
-	@echo "  SONIC (GEAR-SONIC motion-tracking):"
-	@echo "    sonic-smoke-test     - container + import sanity check"
-	@echo "    sonic-data-prep      - BONES-SEED download + CSV-to-PKL (one-time)"
-	@echo "    sonic-test-l40s      - L40S validation (1 GPU, 512 envs, 100 iters)"
-	@echo "    sonic-training       - production (4 GPUs, 4096 envs, 10K iters)"
-	@echo "    sonic-training-l40s  - L40S training (1 GPU, 512 envs, 100 iters)"
 
 # ── Pipeline ────────────────────────────────────────────────────────
 pipeline-compile:
@@ -227,8 +224,8 @@ pipeline-compile-distributed:
 sonic-pipeline-compile:
 	python -m wbc_pipeline.sonic.pipeline
 
-sonic-pipeline-compile-distributed:
-	python -c "from kfp import compiler; from wbc_pipeline.sonic.pipeline import sonic_training_pytorchjob_pipeline; compiler.Compiler().compile(sonic_training_pytorchjob_pipeline, 'sonic_training_pytorchjob_pipeline.yaml'); print('Pipeline compiled to sonic_training_pytorchjob_pipeline.yaml')"
+vla-pipeline-compile:
+	python -m wbc_pipeline.vla.pipeline
 
 pipeline-deploy:
 	oc apply -f deploy/infra/dspa.yaml
@@ -236,6 +233,91 @@ pipeline-deploy:
 	oc wait --for=condition=Ready dspa/dspa -n $(NAMESPACE) --timeout=300s
 	oc apply -f deploy/infra/dspa-rbac.yaml
 	@echo "DSPA deployed. Access pipeline UI via RHOAI dashboard."
+
+# ── Local visualization ─────────────────────────────────────────────
+#
+# Usage:
+#   make download-checkpoint                                          # download latest checkpoint from MinIO
+#   make play                                                         # play latest checkpoint in GUI
+#   make play TASK=WBC-Velocity-Rough-G1-29DOF-v0                     # play with a different env
+#   make record-video TASK=WBC-Velocity-Rough-G1-29DOF-v0             # record video with a different env
+
+TASK ?= WBC-Velocity-Flat-G1-29DOF-v0
+
+# Extract terrain keyword from TASK for checkpoint filtering (e.g. Flat → *flat*)
+_TASK_TERRAIN = $(shell echo '$(TASK)' | sed -n 's/.*Velocity-\([A-Za-z]*\)-.*/\1/p' | tr A-Z a-z)
+
+download-checkpoint:
+	python3 -m wbc_pipeline.download_checkpoint
+
+play:
+	@CKPT=$$(find checkpoints -name '*$(_TASK_TERRAIN)*.pt' -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-); \
+	if [ -z "$$CKPT" ]; then \
+		echo "No checkpoints matching '$(_TASK_TERRAIN)' found. Available:"; \
+		ls checkpoints/*.pt 2>/dev/null || echo "  (none)"; \
+		exit 1; \
+	fi; \
+	echo "Playing: $$CKPT (task: $(TASK))"; \
+	podman run --rm --device nvidia.com/gpu=all \
+		-e ACCEPT_EULA=Y -e DISPLAY=$$DISPLAY \
+		-e XAUTHORITY=/tmp/.Xauthority \
+		-v /tmp/.X11-unix:/tmp/.X11-unix:ro \
+		-v $${XAUTHORITY:-$$HOME/.Xauthority}:/tmp/.Xauthority:ro \
+		--network=host --ipc=host \
+		-v $$(pwd)/checkpoints:/checkpoints:ro \
+		-v $$(pwd)/src:/workspace/wbc_pipeline/src:ro \
+		$(IMAGE):$(TAG) \
+		-m wbc_pipeline.play \
+			--task $(TASK) \
+			--checkpoint /checkpoints/$$(basename $$CKPT) \
+			--num_envs 4
+
+record-video:
+	@CKPT=$$(find checkpoints -name '*$(_TASK_TERRAIN)*.pt' -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-); \
+	if [ -z "$$CKPT" ]; then \
+		echo "No checkpoints matching '$(_TASK_TERRAIN)' found. Available:"; \
+		ls checkpoints/*.pt 2>/dev/null || echo "  (none)"; \
+		exit 1; \
+	fi; \
+	mkdir -p videos; \
+	echo "Recording: $$CKPT (task: $(TASK))"; \
+	podman run --rm --device nvidia.com/gpu=all \
+		-e ACCEPT_EULA=Y \
+		--ipc=host \
+		-v $$(pwd)/checkpoints:/checkpoints:ro \
+		-v $$(pwd)/src:/workspace/wbc_pipeline/src:ro \
+		-v $$(pwd)/videos:/videos \
+		$(IMAGE):$(TAG) \
+		-m wbc_pipeline.play \
+			--task $(TASK) \
+			--checkpoint /checkpoints/$$(basename $$CKPT) \
+			--num_envs 4 \
+			--headless --enable_cameras --video \
+			--video_dir /videos \
+			--video_length 500 \
+			--max_steps 500
+
+record-all-videos:
+	@CKPTS=$$(find checkpoints -name '*$(_TASK_TERRAIN)*.pt' 2>/dev/null | head -1); \
+	if [ -z "$$CKPTS" ]; then \
+		echo "No checkpoints matching '$(_TASK_TERRAIN)' found. Available:"; \
+		ls checkpoints/*.pt 2>/dev/null || echo "  (none)"; \
+		exit 1; \
+	fi; \
+	mkdir -p videos; \
+	echo "Recording videos from checkpoints/..."; \
+	podman run --rm --device nvidia.com/gpu=all \
+		-e ACCEPT_EULA=Y \
+		--ipc=host \
+		-v $$(pwd)/checkpoints:/checkpoints:ro \
+		-v $$(pwd)/src:/workspace/wbc_pipeline/src:ro \
+		-v $$(pwd)/videos:/videos \
+		$(IMAGE):$(TAG) \
+		-m wbc_pipeline.record_training_videos \
+			--task $(TASK) \
+			--checkpoint_dir /checkpoints \
+			--video_dir /videos \
+			--steps 500
 
 # ── Development ──────────────────────────────────────────────────────
 lint:

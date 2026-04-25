@@ -77,7 +77,7 @@ class G1_29DOF_CommandsCfg:
         resampling_time_range=(10.0, 10.0),
         debug_vis=False,
         ranges=mdp.UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(-1.0, 1.0),
+            lin_vel_x=(-0.3, 1.0),
             lin_vel_y=(-0.5, 0.5),
             ang_vel_z=(-1.0, 1.0),
         ),
@@ -115,7 +115,7 @@ class G1_29DOF_RewardsCfg:
                 "contact_forces", body_names=["left_ankle_roll_link", "right_ankle_roll_link"]
             ),
             "command_name": "base_velocity",
-            "threshold": 0.4,
+            "threshold": 0.25,
         },
     )
     feet_slide = RewTerm(

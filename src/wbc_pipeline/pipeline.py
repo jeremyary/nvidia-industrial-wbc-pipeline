@@ -14,6 +14,7 @@ def _configure_gpu_step(task: dsl.PipelineTask) -> None:
     task.set_accelerator_limit(1)
     task.set_cpu_request("8")
     task.set_memory_request("64Gi")
+    task.set_memory_limit("80Gi")
     task.set_env_variable("ACCEPT_EULA", "Y")
     task.set_env_variable("PYTHONUNBUFFERED", "1")
     task.set_env_variable("S3_ENDPOINT", S3_ENDPOINT)
@@ -248,7 +249,7 @@ def wbc_training_pipeline(
         s3_prefix=s3_prefix,
     )
     _configure_gpu_step(train_task)
-    kubernetes.set_timeout(train_task, 28800)
+    kubernetes.set_timeout(train_task, 86400)  # 24 hours
     train_task.set_caching_options(False)
 
     validate_task = validate_onnx_op(
@@ -257,6 +258,7 @@ def wbc_training_pipeline(
         expected_action_dim=expected_action_dim,
     )
     _configure_cpu_step(validate_task)
+    kubernetes.set_timeout(validate_task, 1800)
     validate_task.set_caching_options(False)
 
     register_task = register_model_op(
@@ -270,6 +272,7 @@ def wbc_training_pipeline(
     register_task.set_cpu_request("1")
     register_task.set_memory_request("2Gi")
     register_task.set_env_variable("MODEL_REGISTRY_ADDRESS", MODEL_REGISTRY_ADDRESS)
+    kubernetes.set_timeout(register_task, 600)
     register_task.set_caching_options(False)
 
 
@@ -375,7 +378,7 @@ def wbc_training_pytorchjob_pipeline(
     train_task.set_env_variable("MLFLOW_TRACKING_URI", MLFLOW_TRACKING_URI)
     train_task.set_env_variable("MLFLOW_TRACKING_INSECURE_TLS", "true")
     train_task.set_env_variable("ACCEPT_EULA", "Y")
-    kubernetes.set_timeout(train_task, 28800)
+    kubernetes.set_timeout(train_task, 86400)  # 24 hours
     train_task.set_caching_options(False)
 
     # Step 2: Validate ONNX
@@ -385,6 +388,7 @@ def wbc_training_pytorchjob_pipeline(
         expected_action_dim=expected_action_dim,
     )
     _configure_cpu_step(validate_task)
+    kubernetes.set_timeout(validate_task, 1800)
     validate_task.set_caching_options(False)
 
     # Step 3: Register model
@@ -399,6 +403,7 @@ def wbc_training_pytorchjob_pipeline(
     register_task.set_cpu_request("1")
     register_task.set_memory_request("2Gi")
     register_task.set_env_variable("MODEL_REGISTRY_ADDRESS", MODEL_REGISTRY_ADDRESS)
+    kubernetes.set_timeout(register_task, 600)
     register_task.set_caching_options(False)
 
 

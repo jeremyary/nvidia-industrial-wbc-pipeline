@@ -1,0 +1,274 @@
+# PIPELINE DEFINITION
+# Name: wbc-sonic-import
+# Description: Import pre-trained GEAR-SONIC WBC checkpoint into Model Registry
+# Inputs:
+#    hf_repo_id: str [Default: 'nvidia/GEAR-SONIC']
+#    model_name: str [Default: 'g1-sonic-wbc']
+#    model_version: str [Default: 'v1']
+#    s3_bucket: str [Default: 'wbc-training']
+#    s3_prefix: str [Default: 'gear-sonic']
+components:
+  comp-sonic-fetch-checkpoint-op:
+    executorLabel: exec-sonic-fetch-checkpoint-op
+    inputDefinitions:
+      parameters:
+        hf_repo_id:
+          parameterType: STRING
+        s3_prefix:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        s3_prefix_out:
+          parameterType: STRING
+  comp-sonic-register-checkpoint-op:
+    executorLabel: exec-sonic-register-checkpoint-op
+    inputDefinitions:
+      parameters:
+        model_name:
+          parameterType: STRING
+        model_version:
+          parameterType: STRING
+        s3_bucket:
+          parameterType: STRING
+        s3_prefix:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        registration_result:
+          parameterType: STRING
+  comp-sonic-validate-checkpoint-op:
+    executorLabel: exec-sonic-validate-checkpoint-op
+    inputDefinitions:
+      parameters:
+        s3_prefix:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        validation_result:
+          parameterType: STRING
+deploymentSpec:
+  executors:
+    exec-sonic-fetch-checkpoint-op:
+      container:
+        args:
+        - -c
+        - "set -euo pipefail\nHF_REPO_ID=\"$1\"; S3_PREFIX=\"$2\"; OUTPUT_FILE=\"\
+          $3\"\n\necho \"=== SONIC Checkpoint Fetch ===\"\necho \"HuggingFace repo:\
+          \ ${HF_REPO_ID}\"\necho \"S3 prefix: ${S3_PREFIX}\"\necho \"Start time:\
+          \ $(date -u)\"\n\npython -m wbc_pipeline.sonic.fetch_checkpoint \\\n  --repo-id\
+          \ \"${HF_REPO_ID}\" \\\n  --s3-prefix \"${S3_PREFIX}\"\n\nprintf \"%s\"\
+          \ \"${S3_PREFIX}\" > \"${OUTPUT_FILE}\"\necho \"End time: $(date -u)\"\n\
+          echo \"=== SONIC Checkpoint Fetch: COMPLETE ===\""
+        - --
+        - '{{$.inputs.parameters[''hf_repo_id'']}}'
+        - '{{$.inputs.parameters[''s3_prefix'']}}'
+        - '{{$.outputs.parameters[''s3_prefix_out''].output_file}}'
+        command:
+        - /bin/bash
+        env:
+        - name: PYTHONUNBUFFERED
+          value: '1'
+        - name: S3_ENDPOINT
+          value: http://minio.wbc-training.svc.cluster.local:9000
+        - name: S3_BUCKET
+          value: wbc-training
+        image: quay.io/jary/wbc-sonic:latest
+        resources:
+          cpuRequest: 2.0
+          memoryRequest: 8.589934592
+          resourceCpuRequest: '2'
+          resourceMemoryRequest: 8Gi
+    exec-sonic-register-checkpoint-op:
+      container:
+        args:
+        - -c
+        - "set -euo pipefail\nMODEL_NAME=\"$1\"; MODEL_VERSION=\"$2\"; S3_PREFIX=\"\
+          $3\"\nS3_BUCKET=\"$4\"; OUTPUT_FILE=\"$5\"\nMODEL_URI=\"s3://${S3_BUCKET}/${S3_PREFIX}/onnx\"\
+          \n\necho \"=== SONIC Model Registration ===\"\necho \"Model: ${MODEL_NAME}\
+          \ v${MODEL_VERSION}\"\necho \"URI: ${MODEL_URI}\"\necho \"Start time: $(date\
+          \ -u)\"\n\npython -m wbc_pipeline.registry \\\n  --name \"${MODEL_NAME}\"\
+          \ \\\n  --uri \"${MODEL_URI}\" \\\n  --version \"${MODEL_VERSION}\" \\\n\
+          \  --description \"Pre-trained GEAR-SONIC whole-body controller for G1 29-DOF\"\
+          \n\necho \"REGISTERED\" > \"${OUTPUT_FILE}\"\necho \"End time: $(date -u)\"\
+          \necho \"=== SONIC Model Registration: COMPLETE ===\""
+        - --
+        - '{{$.inputs.parameters[''model_name'']}}'
+        - '{{$.inputs.parameters[''model_version'']}}'
+        - '{{$.inputs.parameters[''s3_prefix'']}}'
+        - '{{$.inputs.parameters[''s3_bucket'']}}'
+        - '{{$.outputs.parameters[''registration_result''].output_file}}'
+        command:
+        - /bin/bash
+        env:
+        - name: PYTHONUNBUFFERED
+          value: '1'
+        - name: S3_ENDPOINT
+          value: http://minio.wbc-training.svc.cluster.local:9000
+        - name: S3_BUCKET
+          value: wbc-training
+        - name: MODEL_REGISTRY_ADDRESS
+          value: http://wbc-model-registry.rhoai-model-registries.svc:8080
+        image: quay.io/jary/wbc-sonic:latest
+        resources:
+          cpuRequest: 1.0
+          memoryRequest: 2.147483648
+          resourceCpuRequest: '1'
+          resourceMemoryRequest: 2Gi
+    exec-sonic-validate-checkpoint-op:
+      container:
+        args:
+        - -c
+        - "set -euo pipefail\nS3_PREFIX=\"$1\"; OUTPUT_FILE=\"$2\"\n\necho \"=== SONIC\
+          \ ONNX Validation ===\"\necho \"S3 prefix: ${S3_PREFIX}\"\necho \"Start\
+          \ time: $(date -u)\"\n\npython -m wbc_pipeline.sonic.validate \\\n  --checkpoint-prefix\
+          \ \"${S3_PREFIX}\"\n\necho \"PASSED\" > \"${OUTPUT_FILE}\"\necho \"End time:\
+          \ $(date -u)\"\necho \"=== SONIC ONNX Validation: COMPLETE ===\""
+        - --
+        - '{{$.inputs.parameters[''s3_prefix'']}}'
+        - '{{$.outputs.parameters[''validation_result''].output_file}}'
+        command:
+        - /bin/bash
+        env:
+        - name: PYTHONUNBUFFERED
+          value: '1'
+        - name: S3_ENDPOINT
+          value: http://minio.wbc-training.svc.cluster.local:9000
+        - name: S3_BUCKET
+          value: wbc-training
+        image: quay.io/jary/wbc-sonic:latest
+        resources:
+          cpuRequest: 2.0
+          memoryRequest: 4.294967296
+          resourceCpuRequest: '2'
+          resourceMemoryRequest: 4Gi
+pipelineInfo:
+  description: Import pre-trained GEAR-SONIC WBC checkpoint into Model Registry
+  name: wbc-sonic-import
+root:
+  dag:
+    tasks:
+      sonic-fetch-checkpoint-op:
+        cachingOptions: {}
+        componentRef:
+          name: comp-sonic-fetch-checkpoint-op
+        inputs:
+          parameters:
+            hf_repo_id:
+              componentInputParameter: hf_repo_id
+            s3_prefix:
+              componentInputParameter: s3_prefix
+        taskInfo:
+          name: sonic-fetch-checkpoint-op
+      sonic-register-checkpoint-op:
+        cachingOptions: {}
+        componentRef:
+          name: comp-sonic-register-checkpoint-op
+        dependentTasks:
+        - sonic-fetch-checkpoint-op
+        - sonic-validate-checkpoint-op
+        inputs:
+          parameters:
+            model_name:
+              componentInputParameter: model_name
+            model_version:
+              componentInputParameter: model_version
+            s3_bucket:
+              componentInputParameter: s3_bucket
+            s3_prefix:
+              taskOutputParameter:
+                outputParameterKey: s3_prefix_out
+                producerTask: sonic-fetch-checkpoint-op
+        taskInfo:
+          name: sonic-register-checkpoint-op
+      sonic-validate-checkpoint-op:
+        cachingOptions: {}
+        componentRef:
+          name: comp-sonic-validate-checkpoint-op
+        dependentTasks:
+        - sonic-fetch-checkpoint-op
+        inputs:
+          parameters:
+            s3_prefix:
+              taskOutputParameter:
+                outputParameterKey: s3_prefix_out
+                producerTask: sonic-fetch-checkpoint-op
+        taskInfo:
+          name: sonic-validate-checkpoint-op
+  inputDefinitions:
+    parameters:
+      hf_repo_id:
+        defaultValue: nvidia/GEAR-SONIC
+        isOptional: true
+        parameterType: STRING
+      model_name:
+        defaultValue: g1-sonic-wbc
+        isOptional: true
+        parameterType: STRING
+      model_version:
+        defaultValue: v1
+        isOptional: true
+        parameterType: STRING
+      s3_bucket:
+        defaultValue: wbc-training
+        isOptional: true
+        parameterType: STRING
+      s3_prefix:
+        defaultValue: gear-sonic
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.16.0
+---
+platforms:
+  kubernetes:
+    deploymentSpec:
+      executors:
+        exec-sonic-fetch-checkpoint-op:
+          imagePullPolicy: Always
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: AWS_ACCESS_KEY_ID
+              secretKey: MINIO_ROOT_USER
+            - envVar: AWS_SECRET_ACCESS_KEY
+              secretKey: MINIO_ROOT_PASSWORD
+            optional: false
+            secretName: minio-credentials
+            secretNameParameter:
+              runtimeValue:
+                constant: minio-credentials
+          - keyToEnv:
+            - envVar: HF_TOKEN
+              secretKey: HF_TOKEN
+            optional: false
+            secretName: hf-credentials
+            secretNameParameter:
+              runtimeValue:
+                constant: hf-credentials
+        exec-sonic-register-checkpoint-op:
+          activeDeadlineSeconds: '600'
+          imagePullPolicy: Always
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: AWS_ACCESS_KEY_ID
+              secretKey: MINIO_ROOT_USER
+            - envVar: AWS_SECRET_ACCESS_KEY
+              secretKey: MINIO_ROOT_PASSWORD
+            optional: false
+            secretName: minio-credentials
+            secretNameParameter:
+              runtimeValue:
+                constant: minio-credentials
+        exec-sonic-validate-checkpoint-op:
+          activeDeadlineSeconds: '1800'
+          imagePullPolicy: Always
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: AWS_ACCESS_KEY_ID
+              secretKey: MINIO_ROOT_USER
+            - envVar: AWS_SECRET_ACCESS_KEY
+              secretKey: MINIO_ROOT_PASSWORD
+            optional: false
+            secretName: minio-credentials
+            secretNameParameter:
+              runtimeValue:
+                constant: minio-credentials
