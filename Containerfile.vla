@@ -31,7 +31,8 @@ ENV CUDA_HOME=/usr/local/cuda
 RUN pip install --no-cache-dir flash-attn==2.7.4.post1 --no-build-isolation || \
     echo "WARNING: flash-attn build failed, using PyTorch SDPA fallback"
 # Install GR00T without dependency resolution — NGC already provides torch, scipy, numpy, etc.
-RUN pip install --no-cache-dir --no-deps -e .
+# GR00T pins requires-python==3.10.* but works on 3.12; NGC 25.04 ships 3.12
+RUN pip install --no-cache-dir --no-deps --ignore-requires-python -e .
 # Install GR00T deps that NGC does not provide (aarch64-aware versions)
 RUN pip install --no-cache-dir \
     albumentations==1.4.18 diffusers==0.35.1 peft==0.17.1 \
