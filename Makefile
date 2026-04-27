@@ -13,10 +13,11 @@ MODEL_REGISTRY_DB_NAME ?= wbc_model_registry
 
 .PHONY: build-sonic push-sonic \
         build-gallery push-gallery \
-        build-vla push-vla \
-        deploy-infra deploy-model-registry \
+        build-vla push-vla build-vla-arm64 push-vla-arm64 \
+        deploy-infra deploy-bare-infra deploy-model-registry \
         sonic-pipeline-compile vla-pipeline-compile \
         pipeline-deploy \
+        vla-job-data-prep vla-job-fine-tune vla-job-validate vla-job-run \
         lint test
 
 # ── Container ────────────────────────────────────────────────────────
@@ -40,6 +41,13 @@ build-vla:
 
 push-vla: build-vla
 	podman push $(VLA_IMAGE):$(TAG)
+
+build-vla-arm64:
+	podman build --format docker --platform linux/arm64 \
+		-t $(VLA_IMAGE):$(TAG)-arm64 -f Containerfile.vla .
+
+push-vla-arm64: build-vla-arm64
+	podman push $(VLA_IMAGE):$(TAG)-arm64
 
 # ── OCP infrastructure ──────────────────────────────────────────────
 deploy-infra:
@@ -94,6 +102,43 @@ pipeline-deploy:
 	oc wait --for=condition=Ready dspa/dspa -n $(NAMESPACE) --timeout=300s
 	oc apply -f deploy/infra/dspa-rbac.yaml
 	@echo "DSPA deployed. Access pipeline UI via RHOAI dashboard."
+
+# ── Bare K8s Jobs (secondary path for clusters without RHOAI) ──────
+deploy-bare-infra:
+	oc apply -f deploy/infra/namespace.yaml
+	oc project $(NAMESPACE)
+	oc apply -f deploy/infra/minio.yaml
+	oc delete job minio-init -n $(NAMESPACE) --ignore-not-found
+	oc apply -f deploy/infra/minio-init.yaml
+	oc wait --for=condition=complete job/minio-init -n $(NAMESPACE) --timeout=120s
+ifdef HF_TOKEN
+	oc create secret generic hf-credentials -n $(NAMESPACE) \
+		--from-literal=HF_TOKEN=$(HF_TOKEN) \
+		--dry-run=client -o yaml | oc apply -f -
+	@echo "HF credentials secret created/updated."
+endif
+	@echo "Bare infra deployed (MinIO + secrets). No RHOAI/DSPA/Kueue."
+
+vla-job-data-prep:
+	oc delete job vla-data-prep -n $(NAMESPACE) --ignore-not-found
+	oc apply -f deploy/jobs/vla/data-prep.yaml
+	@echo "Waiting for data prep to complete (up to 30 min)..."
+	oc wait --for=condition=complete job/vla-data-prep -n $(NAMESPACE) --timeout=1800s
+
+vla-job-fine-tune:
+	oc delete job vla-fine-tune -n $(NAMESPACE) --ignore-not-found
+	oc apply -f deploy/jobs/vla/fine-tune.yaml
+	@echo "Waiting for fine-tuning to complete (up to 2 hours)..."
+	oc wait --for=condition=complete job/vla-fine-tune -n $(NAMESPACE) --timeout=7200s
+
+vla-job-validate:
+	oc delete job vla-validate -n $(NAMESPACE) --ignore-not-found
+	oc apply -f deploy/jobs/vla/validate.yaml
+	@echo "Waiting for ONNX validation to complete (up to 30 min)..."
+	oc wait --for=condition=complete job/vla-validate -n $(NAMESPACE) --timeout=1800s
+
+vla-job-run: vla-job-data-prep vla-job-fine-tune vla-job-validate
+	@echo "VLA pipeline complete (bare K8s Jobs)."
 
 # ── Development ──────────────────────────────────────────────────────
 lint:

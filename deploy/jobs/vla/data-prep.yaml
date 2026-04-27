@@ -1,0 +1,54 @@
+# This project was developed with assistance from AI tools.
+# VLA data prep Job: download GR00T N1.7-3B base model + dataset from HuggingFace, cache in S3.
+# Bare K8s alternative to the KFP vla_data_prep_op component.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vla-data-prep
+  namespace: wbc-training
+  labels:
+    pipeline.wbc/component: vla
+    pipeline.wbc/phase: data-prep
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        pipeline.wbc/component: vla
+        pipeline.wbc/phase: data-prep
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsUser: 1001
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: data-prep
+          image: quay.io/jary/wbc-vla:latest
+          imagePullPolicy: Always
+          command: ["python", "-m", "wbc_pipeline.vla.data_prep"]
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: S3_ENDPOINT
+              value: "http://minio.wbc-training.svc.cluster.local:9000"
+            - name: S3_BUCKET
+              value: "wbc-training"
+            - name: VLA_S3_MODEL_PREFIX
+              value: "vla-finetune/base-model"
+            - name: VLA_S3_DATASET_PREFIX
+              value: "vla-finetune/dataset"
+          envFrom:
+            - secretRef:
+                name: minio-credentials
+            - secretRef:
+                name: hf-credentials
+          resources:
+            requests:
+              cpu: "4"
+              memory: 16Gi
+            limits:
+              memory: 16Gi

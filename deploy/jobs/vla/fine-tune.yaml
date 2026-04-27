@@ -1,0 +1,78 @@
+# This project was developed with assistance from AI tools.
+# VLA fine-tuning Job: GR00T N1.7-3B DiT fine-tune + ONNX export on 4 GPUs.
+# Bare K8s alternative to the KFP vla_fine_tune_and_export_op component.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vla-fine-tune
+  namespace: wbc-training
+  labels:
+    pipeline.wbc/component: vla
+    pipeline.wbc/phase: fine-tune
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        pipeline.wbc/component: vla
+        pipeline.wbc/phase: fine-tune
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 1001
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+      containers:
+        - name: fine-tune
+          image: quay.io/jary/wbc-vla:latest
+          imagePullPolicy: Always
+          command:
+            - python
+            - -m
+            - wbc_pipeline.vla.fine_tune
+            - --num-gpus
+            - "4"
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: S3_ENDPOINT
+              value: "http://minio.wbc-training.svc.cluster.local:9000"
+            - name: S3_BUCKET
+              value: "wbc-training"
+            - name: VLA_S3_MODEL_PREFIX
+              value: "vla-finetune/base-model"
+            - name: VLA_S3_DATASET_PREFIX
+              value: "vla-finetune/dataset"
+            - name: VLA_S3_CHECKPOINT_PREFIX
+              value: "vla-finetune"
+            - name: VLA_NUM_GPUS
+              value: "4"
+            - name: HOME
+              value: /tmp
+            - name: TRITON_CACHE_DIR
+              value: /tmp/.triton
+          envFrom:
+            - secretRef:
+                name: minio-credentials
+            - secretRef:
+                name: hf-credentials
+          resources:
+            requests:
+              cpu: "14"
+              memory: 64Gi
+              nvidia.com/gpu: "4"
+            limits:
+              memory: 110Gi
+              nvidia.com/gpu: "4"
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
