@@ -90,9 +90,10 @@ spec:
       containers:
         - name: init
           image: quay.io/minio/mc:latest
-          command: ["/bin/bash", "-c"]
+          command: ["/bin/sh", "-c"]
           args:
             - |
+              sleep 5 &&
               mc alias set local http://minio:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD &&
               mc mb local/wbc-training --ignore-existing &&
               mc mb local/mlflow --ignore-existing &&
