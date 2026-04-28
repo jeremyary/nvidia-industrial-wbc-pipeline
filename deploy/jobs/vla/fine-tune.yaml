@@ -58,9 +58,17 @@ spec:
               value: /tmp
             - name: TRITON_CACHE_DIR
               value: /tmp/.triton
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: MINIO_ROOT_USER
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: MINIO_ROOT_PASSWORD
           envFrom:
-            - secretRef:
-                name: minio-credentials
             - secretRef:
                 name: hf-credentials
           resources:
